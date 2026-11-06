@@ -1,0 +1,1939 @@
+openapi: 3.0.3
+info:
+  title: LATAM Disruption Companion API
+  version: 1.0.0
+  description: 'Microservicio Backend Hexagonal para gestion determinista e hibrida (IA gobernada) de disrupciones
+    de vuelos, conexiones perdidas, elegibilidad de politicas, reubicaciones idempotentes y escalamiento humano
+    prioritario.
+
+    '
+  contact:
+    name: Edwin Ferreira
+    email: edwinferreira92@gmail.com
+servers:
+- url: http://localhost:8080
+  description: Entorno local certificado en Docker Compose (Java 25 + Spring Boot 4.1.2 + PostgreSQL 17)
+tags:
+- name: Evaluaciones
+  description: Diagnostico determinista de disrupcion, reconciliacion de eventos y filtrado de opciones.
+- name: Consultas
+  description: Resolucion hibrida de consultas abiertas mediante el Sandwich de Seguridad de IA (cero PII).
+- name: Reubicaciones
+  description: Ejecucion idempotente de cambios de vuelo con proteccion ante timeouts indeterminados.
+- name: Escalamientos
+  description: Creacion idempotente de casos prioritarios para especialistas humanos.
+paths:
+  /operaciones/vuelos/v1/disrupciones/reservas/{bookingId}/evaluaciones:
+    get:
+      tags:
+      - Evaluaciones
+      operationId: evaluateDisruption
+      summary: Evalua el estado operativo del viaje, perdida de conexion y opciones elegibles
+      description: 'Reconcilia eventos operacionales descartando fuentes degradadas (`_meta.sources_degraded`),
+        calcula perdida de conexion contra el tiempo minimo de conexion (MCT = 60 min), evalua reglas de la politica
+        vigente (`POL-DELAY-2026-03`) y filtra opciones candidatas segun vigencia TTL, capacidad del grupo y tarifa.
+
+
+        <!-- matriz:inicio -->
+
+
+        #### Resultado real por valor enviado
+
+        Cada fila es una ejecución real contra el servicio. Los demás campos llevan el valor del ejemplo.
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | bookingId | Caso base valido ABC123 | `ABC123` | 200 | respuesta exitosa |
+
+        | bookingId | Menor longitud minima (5 chars) | `ABC12` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT
+        |
+
+        | bookingId | Mayor longitud maxima (9 chars) | `ABC123456` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT
+        |
+
+        | bookingId | Minusculas no permitidas | `abc123` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT |
+
+        | bookingId | Caracteres especiales guion | `ABC-12` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT
+        |
+
+        | bookingId | OWASP SQL Injection | `'' OR 1=1--` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT |
+
+        | bookingId | OWASP XSS Script Tag | `<script>` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT |
+
+        | bookingId | OWASP SSTI Expression | `${7*7}` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT |
+
+        | URI Firewall | OWASP Matrix Parameter Injection (;DROP) | `ABC123;DROP` | 400 | codigoRespuesta MALICIOUS_URI_REJECTED
+        |
+
+        | URI Firewall | OWASP Encoded Slash (%2F..) | `ABC%2F..` | 400 | página HTML del servidor web |
+
+        | URI Firewall | OWASP Null Byte (%00) | `ABC123%00` | 400 | página HTML del servidor web |
+
+        | URI Firewall | OWASP CRLF Injection (%0d%0a) | `ABC123%0d%0a` | 400 | codigoRespuesta MALICIOUS_URI_REJECTED
+        |
+
+
+        #### Requests HTTP inusuales (método, ruta, cabeceras, codificación, tamaño)
+
+        Algunos los rechaza el servidor web antes de llegar a la aplicación: responden con su propia página (no
+        JSON).
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | HTTP Method | Verbo DELETE no permitido | `DELETE` | 405 | codigoRespuesta METHOD_NOT_ALLOWED |
+
+        | HTTP Method | Verbo POST no permitido en evaluaciones | `POST` | 405 | codigoRespuesta METHOD_NOT_ALLOWED
+        |
+
+        | Accept Header | Representacion XML no soportada (406) | `application/xml` | 406 | codigoRespuesta NOT_ACCEPTABLE_REPRESENTATION
+        |
+
+
+        #### Respuesta ante cada situación de los sistemas de destino
+
+
+        | Sistema | Situación | HTTP | Respuesta |
+
+        |---|---|---|---|
+
+        | get_trip_context | Reserva inexistente ZZZ999 (404) | 404 | codigoRespuesta BOOKING_NOT_FOUND |
+
+        | get_operational_events | Todas las fuentes degradadas ALLDEG (503) | 503 | codigoRespuesta ALL_OPERATIONAL_SOURCES_DEGRADED
+        |
+
+        | get_operational_events | Conflicto entre fuentes saludables CONFL1 (200 con escalamiento) | 200 | respuesta
+        exitosa |
+
+        | get_eligible_options | Catalogo de opciones con TTL vencido EXP123 | 200 | respuesta exitosa |
+
+
+        <!-- matriz:fin -->'
+      parameters:
+      - $ref: '#/components/parameters/BookingIdParam'
+      responses:
+        '200':
+          description: Evaluacion determinista generada exitosamente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssessmentResponseDto'
+              examples:
+                bookingId_Caso_base_valido_ABC123:
+                  summary: 'bookingId: Caso base valido ABC123'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — Caso base valido ABC123: `ABC123`'
+                  value:
+                    bookingId: ABC123
+                    passengerCount: 2
+                    includesMinor: true
+                    relevantModification: true
+                    missedConnection: true
+                    primaryDelayMinutes: 160
+                    updatedDepartureTime: '17:10'
+                    updatedGate: '24'
+                    sourceConflictDetected: false
+                    discardedSources:
+                    - LEGACY_MIRROR
+                    policyVersion: POL-DELAY-2026-03
+                    appliedRuleIds:
+                    - R3
+                    - R5
+                    entitlements:
+                    - REBOOK_NO_FEE
+                    - PRIORITY_HANDLING
+                    requiresHumanApproval: true
+                    overnightRequired: true
+                    blockedByMissingPenaltyAmount: false
+                    optionsExpired: false
+                    recommendedOptionId: O1
+                    recommendedFlightNumber: LA2412
+                    evaluatedOptions:
+                    - optionId: O1
+                      type: REBOOK
+                      flightNumber: LA2412
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-16'
+                      departure: 08:15
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 4
+                      policyRef: POL-DELAY-2026-03
+                      confidence: HIGH
+                      eligible: true
+                      rejectionReasons: []
+                    - optionId: O2
+                      type: REBOOK
+                      flightNumber: LA2450
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-15'
+                      departure: '23:40'
+                      fareDifference: 180000
+                      currency: CLP
+                      seatsAvailable: 1
+                      policyRef: POL-DELAY-2026-03
+                      confidence: MEDIUM
+                      eligible: false
+                      rejectionReasons:
+                      - INSUFFICIENT_SEATS_FOR_GROUP
+                      - NON_ZERO_FARE_WHEN_NO_FEE_ENTITLED
+                    - optionId: O3
+                      type: REFUND
+                      flightNumber: null
+                      origin: null
+                      destination: null
+                      date: null
+                      departure: null
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 0
+                      policyRef: POL-REFUND-2026-01
+                      confidence: LOW
+                      eligible: false
+                      rejectionReasons:
+                      - NON_REFUNDABLE_FARE_AND_LOW_CONFIDENCE
+                    passengerExplanation: 'Reserva ABC123: El vuelo inicial registra una demora verificada de 160
+                      minutos (nueva salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion
+                      programada en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5),
+                      corresponde cambio sin costo a la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15). El
+                      caso requiere asistencia prioritaria de un especialista humano.'
+                get_operational_events_Conflicto_entre_fuentes_saludables_CO:
+                  summary: 'get_operational_events: Conflicto entre fuentes saludables CONFL1 (200 con escalamiento)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_operational_events** — Conflicto entre fuentes saludables CONFL1 (200 con escalamiento):
+                    `CONFL1`'
+                  value:
+                    bookingId: CONFL1
+                    passengerCount: 2
+                    includesMinor: true
+                    relevantModification: true
+                    missedConnection: true
+                    primaryDelayMinutes: 160
+                    updatedDepartureTime: '17:10'
+                    updatedGate: '24'
+                    sourceConflictDetected: true
+                    discardedSources: []
+                    policyVersion: POL-DELAY-2026-03
+                    appliedRuleIds:
+                    - R3
+                    - R5
+                    entitlements:
+                    - REBOOK_NO_FEE
+                    - PRIORITY_HANDLING
+                    requiresHumanApproval: true
+                    overnightRequired: true
+                    blockedByMissingPenaltyAmount: false
+                    optionsExpired: false
+                    recommendedOptionId: O1
+                    recommendedFlightNumber: LA2412
+                    evaluatedOptions:
+                    - optionId: O1
+                      type: REBOOK
+                      flightNumber: LA2412
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-16'
+                      departure: 08:15
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 4
+                      policyRef: POL-DELAY-2026-03
+                      confidence: HIGH
+                      eligible: true
+                      rejectionReasons: []
+                    - optionId: O2
+                      type: REBOOK
+                      flightNumber: LA2450
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-15'
+                      departure: '23:40'
+                      fareDifference: 180000
+                      currency: CLP
+                      seatsAvailable: 1
+                      policyRef: POL-DELAY-2026-03
+                      confidence: MEDIUM
+                      eligible: false
+                      rejectionReasons:
+                      - INSUFFICIENT_SEATS_FOR_GROUP
+                      - NON_ZERO_FARE_WHEN_NO_FEE_ENTITLED
+                    - optionId: O3
+                      type: REFUND
+                      flightNumber: null
+                      origin: null
+                      destination: null
+                      date: null
+                      departure: null
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 0
+                      policyRef: POL-REFUND-2026-01
+                      confidence: LOW
+                      eligible: false
+                      rejectionReasons:
+                      - NON_REFUNDABLE_FARE_AND_LOW_CONFIDENCE
+                    passengerExplanation: 'Reserva CONFL1: El vuelo inicial registra una demora verificada de 160
+                      minutos (nueva salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion
+                      programada en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5),
+                      corresponde cambio sin costo a la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15). El
+                      caso requiere asistencia prioritaria de un especialista humano.'
+                get_eligible_options_Catalogo_de_opciones_con_TTL_vencido_EX:
+                  summary: 'get_eligible_options: Catalogo de opciones con TTL vencido EXP123'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_eligible_options** — Catalogo de opciones con TTL vencido EXP123: `EXP123`'
+                  value:
+                    bookingId: EXP123
+                    passengerCount: 2
+                    includesMinor: true
+                    relevantModification: true
+                    missedConnection: true
+                    primaryDelayMinutes: 160
+                    updatedDepartureTime: '17:10'
+                    updatedGate: '24'
+                    sourceConflictDetected: false
+                    discardedSources:
+                    - LEGACY_MIRROR
+                    policyVersion: POL-DELAY-2026-03
+                    appliedRuleIds:
+                    - R3
+                    - R5
+                    entitlements:
+                    - REBOOK_NO_FEE
+                    - PRIORITY_HANDLING
+                    requiresHumanApproval: true
+                    overnightRequired: false
+                    blockedByMissingPenaltyAmount: false
+                    optionsExpired: true
+                    recommendedOptionId: null
+                    recommendedFlightNumber: null
+                    evaluatedOptions:
+                    - optionId: O1
+                      type: REBOOK
+                      flightNumber: LA2412
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-16'
+                      departure: 08:15
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 4
+                      policyRef: POL-DELAY-2026-03
+                      confidence: HIGH
+                      eligible: false
+                      rejectionReasons:
+                      - OPTION_TTL_EXPIRED
+                    - optionId: O2
+                      type: REBOOK
+                      flightNumber: LA2450
+                      origin: LIM
+                      destination: MEX
+                      date: '2026-09-15'
+                      departure: '23:40'
+                      fareDifference: 180000
+                      currency: CLP
+                      seatsAvailable: 1
+                      policyRef: POL-DELAY-2026-03
+                      confidence: MEDIUM
+                      eligible: false
+                      rejectionReasons:
+                      - OPTION_TTL_EXPIRED
+                      - INSUFFICIENT_SEATS_FOR_GROUP
+                      - NON_ZERO_FARE_WHEN_NO_FEE_ENTITLED
+                    - optionId: O3
+                      type: REFUND
+                      flightNumber: null
+                      origin: null
+                      destination: null
+                      date: null
+                      departure: null
+                      fareDifference: 0
+                      currency: CLP
+                      seatsAvailable: 0
+                      policyRef: POL-REFUND-2026-01
+                      confidence: LOW
+                      eligible: false
+                      rejectionReasons:
+                      - OPTION_TTL_EXPIRED
+                      - NON_REFUNDABLE_FARE_AND_LOW_CONFIDENCE
+                    passengerExplanation: 'Reserva EXP123: El vuelo inicial registra una demora verificada de 160
+                      minutos (nueva salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion
+                      programada en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5),
+                      no existen opciones automaticas con cupo vigente para el grupo. El caso requiere asistencia
+                      prioritaria de un especialista humano.'
+        '400':
+          description: Parametro bookingId invalido o bloqueado por firewall de URI.
+          content:
+            application/json:
+              schema: &id001
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                bookingId_Menor_longitud_minima_5_chars:
+                  summary: 'bookingId: Menor longitud minima (5 chars)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — Menor longitud minima (5 chars): `ABC12`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC12/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_Mayor_longitud_maxima_9_chars:
+                  summary: 'bookingId: Mayor longitud maxima (9 chars)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — Mayor longitud maxima (9 chars): `ABC123456`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123456/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_Minusculas_no_permitidas:
+                  summary: 'bookingId: Minusculas no permitidas'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — Minusculas no permitidas: `abc123`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/abc123/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_Caracteres_especiales_guion:
+                  summary: 'bookingId: Caracteres especiales guion'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — Caracteres especiales guion: `ABC-12`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC-12/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_OWASP_SQL_Injection:
+                  summary: 'bookingId: OWASP SQL Injection'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — OWASP SQL Injection: `'' OR 1=1--`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/%27%20OR%201%3D1--/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_OWASP_XSS_Script_Tag:
+                  summary: 'bookingId: OWASP XSS Script Tag'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — OWASP XSS Script Tag: `<script>`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/%3Cscript%3E/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_OWASP_SSTI_Expression:
+                  summary: 'bookingId: OWASP SSTI Expression'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — OWASP SSTI Expression: `${7*7}`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/%24%7B7%2A7%7D/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                URI_Firewall_OWASP_Matrix_Parameter_Injection_DROP:
+                  summary: 'URI Firewall: OWASP Matrix Parameter Injection (;DROP)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **URI Firewall** — OWASP Matrix Parameter Injection (;DROP): `ABC123;DROP`'
+                  value:
+                    code: MALICIOUS_URI_REJECTED
+                    codigoRespuesta: MALICIOUS_URI_REJECTED
+                    message: La URI contiene secuencias o parametros de matriz no permitidos
+                    status: 400
+                    path: REDACTED_URI
+                    timestamp: '2026-11-06T06:07:50.405653306Z'
+                URI_Firewall_OWASP_CRLF_Injection_0d_0a:
+                  summary: 'URI Firewall: OWASP CRLF Injection (%0d%0a)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **URI Firewall** — OWASP CRLF Injection (%0d%0a): `ABC123%0d%0a`'
+                  value:
+                    code: MALICIOUS_URI_REJECTED
+                    codigoRespuesta: MALICIOUS_URI_REJECTED
+                    message: La URI contiene secuencias o parametros de matriz no permitidos
+                    status: 400
+                    path: REDACTED_URI
+                    timestamp: '2026-11-06T06:07:50.409223055Z'
+            text/html:
+              schema: *id001
+              examples:
+                URI_Firewall_OWASP_Encoded_Slash_2F:
+                  summary: página HTML del servidor web (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **URI Firewall** — OWASP Encoded Slash (%2F..): `ABC%2F..`
+
+                    - **URI Firewall** — OWASP Null Byte (%00): `ABC123%00`'
+                  value:
+                    _texto: <!doctype html><html lang="en"><head><title>HTTP Status 400 – Bad Request</title><style
+                      type="text/css">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;}
+                      h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;
+        '404':
+          description: Reserva no encontrada en el contexto operativo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                get_trip_context_Reserva_inexistente_ZZZ999_404:
+                  summary: 'get_trip_context: Reserva inexistente ZZZ999 (404)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_trip_context** — Reserva inexistente ZZZ999 (404): `ZZZ999`'
+                  value:
+                    code: BOOKING_NOT_FOUND
+                    codigoRespuesta: BOOKING_NOT_FOUND
+                    message: No se encontro contexto de viaje para la reserva solicitada
+                    status: 404
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ZZZ999/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '405':
+          description: Metodo HTTP no permitido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                HTTP_Method_Verbo_DELETE_no_permitido:
+                  summary: codigoRespuesta METHOD_NOT_ALLOWED (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **HTTP Method** — Verbo DELETE no permitido: `DELETE`
+
+                    - **HTTP Method** — Verbo POST no permitido en evaluaciones: `POST`'
+                  value:
+                    code: METHOD_NOT_ALLOWED
+                    codigoRespuesta: METHOD_NOT_ALLOWED
+                    message: El verbo HTTP utilizado no esta soportado en este recurso
+                    status: 405
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '406':
+          description: Representacion solicitada en cabecera Accept no soportada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                Accept_Header_Representacion_XML_no_soportada_406:
+                  summary: 'Accept Header: Representacion XML no soportada (406)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **Accept Header** — Representacion XML no soportada (406): `application/xml`'
+                  value:
+                    code: NOT_ACCEPTABLE_REPRESENTATION
+                    codigoRespuesta: NOT_ACCEPTABLE_REPRESENTATION
+                    message: El formato solicitado en la cabecera Accept no es soportado
+                    status: 406
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '503':
+          description: Todas las fuentes operacionales se encuentran degradadas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                get_operational_events_Todas_las_fuentes_degradadas_ALLDEG_5:
+                  summary: 'get_operational_events: Todas las fuentes degradadas ALLDEG (503)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_operational_events** — Todas las fuentes degradadas ALLDEG (503): `ALLDEG`'
+                  value:
+                    code: ALL_OPERATIONAL_SOURCES_DEGRADED
+                    codigoRespuesta: ALL_OPERATIONAL_SOURCES_DEGRADED
+                    message: No existen fuentes operacionales saludables para verificar el estado del vuelo
+                    status: 503
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ALLDEG/evaluaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+  /operaciones/vuelos/v1/disrupciones/reservas/{bookingId}/consultas:
+    post:
+      tags:
+      - Consultas
+      operationId: resolvePassengerInquiry
+      summary: Resuelve una consulta del pasajero mediante el Sandwich Determinista + IA Gobernada
+      description: 'Anonimiza el contexto eliminando todo PII antes de consultar el adaptador de IA calibrado (temperatura
+        0.0, umbral de confianza >= 0.85), valida la salida contra las reglas y opciones aprobadas por el motor
+        determinista, y cae a fallback determinista con escalamiento humano automatico ante cualquier alucinacion
+        o baja confianza.
+
+
+        <!-- matriz:inicio -->
+
+
+        #### Resultado real por valor enviado
+
+        Cada fila es una ejecución real contra el servicio. Los demás campos llevan el valor del ejemplo.
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | question | Consulta estandar sobre conexion y menor | `¿Que opciones tengo para llegar a Mexico con mi
+        hijo?` | 200 | respuesta exitosa |
+
+        | question | Consulta con PII en texto que es redactado antes del modelo | `Soy María Silva RUT 12.345.678-9
+        correo maria.silva@example.com tel +56 9 8765 4321 ¿mi vuelo?` | 200 | respuesta exitosa |
+
+        | question | Solicitud de compensacion en efectivo (activa regla R4) | `Exijo compensacion en dinero efectivo
+        por perder mi conexion` | 200 | respuesta exitosa |
+
+        | question | Pregunta vacia | `""` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | question | Pregunta solo espacios | `   ` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | question | Pregunta menor a 3 caracteres | `ab` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | question | Pregunta supera 500 caracteres | `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`
+        | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | question | Pregunta nula | — | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | bookingId | bookingId invalido en consulta | `bad_id` | 400 | codigoRespuesta INVALID_PARAMETER_CONSTRAINT
+        |
+
+        | body | JSON vacio sin campo question | `{}` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | body | Propiedad no documentada (Mass Assignment) | `{"question":"Hola","role":"ADMIN"}` | 400 | codigoRespuesta
+        MALFORMED_OR_UNKNOWN_PAYLOAD |
+
+        | body | JSON truncado malformado | `{"question":` | 400 | codigoRespuesta MALFORMED_OR_UNKNOWN_PAYLOAD
+        |
+
+
+        #### Requests HTTP inusuales (método, ruta, cabeceras, codificación, tamaño)
+
+        Algunos los rechaza el servidor web antes de llegar a la aplicación: responden con su propia página (no
+        JSON).
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | Content-Type | Content-Type text/plain no soportado (415) | `text/plain` | 415 | codigoRespuesta UNSUPPORTED_MEDIA_TYPE
+        |
+
+        | HTTP Method | Verbo GET no permitido en consultas (405) | `GET` | 405 | codigoRespuesta METHOD_NOT_ALLOWED
+        |
+
+
+        #### Respuesta ante cada situación de los sistemas de destino
+
+
+        | Sistema | Situación | HTTP | Respuesta |
+
+        |---|---|---|---|
+
+        | ai_safety_sandwich | Guardrail bloquea alucinacion de vuelo O2 sin cupo | 200 | respuesta exitosa |
+
+        | ai_safety_sandwich | Guardrail bloquea respuesta con confianza < 0.85 | 200 | respuesta exitosa |
+
+        | ai_safety_sandwich | Guardrail bloquea promesa no autorizada de efectivo | 200 | respuesta exitosa |
+
+        | get_trip_context | Reserva inexistente ZZZ999 en consulta (404) | 404 | codigoRespuesta BOOKING_NOT_FOUND
+        |
+
+
+        <!-- matriz:fin -->'
+      parameters:
+      - $ref: '#/components/parameters/BookingIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InquiryRequestDto'
+      responses:
+        '200':
+          description: Consulta resuelta y validada por los guardarrailes de salida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InquiryResponseDto'
+              examples:
+                question_Consulta_estandar_sobre_conexion_y_menor:
+                  summary: respuesta exitosa (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **question** — Consulta estandar sobre conexion y menor: `¿Que opciones tengo para llegar
+                    a Mexico con mi hijo?`
+
+                    - **question** — Consulta con PII en texto que es redactado antes del modelo: `Soy María Silva
+                    RUT 12.345.678-9 correo maria.silva@example.com tel +56 9 8765 4321 ¿mi vuelo?`'
+                  value:
+                    bookingId: ABC123
+                    resolutionMode: AI_ASSISTED_VALIDATED
+                    validatedPolicyRef: POL-DELAY-2026-03
+                    recommendedOptionId: O1
+                    confidenceScore: 0.94
+                    requiresHumanEscalation: true
+                    humanCaseId: HC-4471
+                    guardrailRejectionReason: null
+                    message: De acuerdo con la verificacion operativa de la reserva ABC123, el tramo inicial registra
+                      una demora verificada de 160 minutos en puerta 24, lo que impide conectar con el vuelo LA2410
+                      en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas R3 y R5), tienes derecho a cambio
+                      sin costo hacia la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15 con 4 asientos disponibles)
+                      y asistencia prioritaria de un especialista humano para coordinar la pernocta del grupo familiar.
+                question_Solicitud_de_compensacion_en_efectivo_activa_regla_:
+                  summary: 'question: Solicitud de compensacion en efectivo (activa regla R4)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **question** — Solicitud de compensacion en efectivo (activa regla R4): `Exijo compensacion
+                    en dinero efectivo por perder mi conexion`'
+                  value:
+                    bookingId: ABC123
+                    resolutionMode: AI_ASSISTED_VALIDATED
+                    validatedPolicyRef: POL-DELAY-2026-03
+                    recommendedOptionId: O1
+                    confidenceScore: 0.94
+                    requiresHumanEscalation: true
+                    humanCaseId: HC-4472
+                    guardrailRejectionReason: null
+                    message: De acuerdo con la verificacion operativa de la reserva ABC123, el tramo inicial registra
+                      una demora verificada de 160 minutos en puerta 24, lo que impide conectar con el vuelo LA2410
+                      en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas R3, R4 y R5), tienes derecho a
+                      cambio sin costo hacia la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15 con 4 asientos
+                      disponibles) y asistencia prioritaria de un especialista humano para coordinar la pernocta
+                      del grupo familiar. Respecto a tu solicitud de compensacion en efectivo (regla R4), las compensaciones
+                      monetarias no se aprueban automaticamente y quedaron asociadas a tu caso de revision humana
+                      especializada.
+                ai_safety_sandwich_Guardrail_bloquea_alucinacion_de_vuelo_O2:
+                  summary: 'ai_safety_sandwich: Guardrail bloquea alucinacion de vuelo O2 sin cupo'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **ai_safety_sandwich** — Guardrail bloquea alucinacion de vuelo O2 sin cupo: `[SIMULATE_HALLUCINATION_O2]`'
+                  value:
+                    bookingId: ABC123
+                    resolutionMode: DETERMINISTIC_FALLBACK_GUARDRAIL_TRIGGERED
+                    validatedPolicyRef: POL-DELAY-2026-03
+                    recommendedOptionId: O1
+                    confidenceScore: 0.0
+                    requiresHumanEscalation: true
+                    humanCaseId: HC-4471
+                    guardrailRejectionReason: UNELIGIBLE_OPTION_OR_FLIGHT_REFERENCED
+                    message: 'Reserva ABC123: El vuelo inicial registra una demora verificada de 160 minutos (nueva
+                      salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion programada
+                      en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5), corresponde
+                      cambio sin costo a la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15). El caso requiere
+                      asistencia prioritaria de un especialista humano.'
+                ai_safety_sandwich_Guardrail_bloquea_respuesta_con_confianza:
+                  summary: 'ai_safety_sandwich: Guardrail bloquea respuesta con confianza < 0.85'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **ai_safety_sandwich** — Guardrail bloquea respuesta con confianza < 0.85: `[SIMULATE_LOW_CONFIDENCE]`'
+                  value:
+                    bookingId: ABC123
+                    resolutionMode: DETERMINISTIC_FALLBACK_GUARDRAIL_TRIGGERED
+                    validatedPolicyRef: POL-DELAY-2026-03
+                    recommendedOptionId: O1
+                    confidenceScore: 0.0
+                    requiresHumanEscalation: true
+                    humanCaseId: HC-4471
+                    guardrailRejectionReason: LOW_CONFIDENCE_BELOW_THRESHOLD
+                    message: 'Reserva ABC123: El vuelo inicial registra una demora verificada de 160 minutos (nueva
+                      salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion programada
+                      en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5), corresponde
+                      cambio sin costo a la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15). El caso requiere
+                      asistencia prioritaria de un especialista humano.'
+                ai_safety_sandwich_Guardrail_bloquea_promesa_no_autorizada_d:
+                  summary: 'ai_safety_sandwich: Guardrail bloquea promesa no autorizada de efectivo'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **ai_safety_sandwich** — Guardrail bloquea promesa no autorizada de efectivo: `[SIMULATE_CASH_PROMISE]`'
+                  value:
+                    bookingId: ABC123
+                    resolutionMode: DETERMINISTIC_FALLBACK_GUARDRAIL_TRIGGERED
+                    validatedPolicyRef: POL-DELAY-2026-03
+                    recommendedOptionId: O1
+                    confidenceScore: 0.0
+                    requiresHumanEscalation: true
+                    humanCaseId: HC-4471
+                    guardrailRejectionReason: UNAUTHORIZED_CASH_COMPENSATION_PROMISE
+                    message: 'Reserva ABC123: El vuelo inicial registra una demora verificada de 160 minutos (nueva
+                      salida estimada 17:10) en puerta 24. Debido a esta demora se pierde la conexion programada
+                      en Lima. Bajo la politica vigente POL-DELAY-2026-03 (reglas aplicadas: R3, R5), corresponde
+                      cambio sin costo a la opcion O1 (vuelo LA2412 del 2026-09-16 a las 08:15). El caso requiere
+                      asistencia prioritaria de un especialista humano.'
+        '400':
+          description: Solicitud invalida, pregunta vacia, exceso de longitud o propiedad desconocida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                question_Pregunta_vacia:
+                  summary: codigoRespuesta INVALID_REQUEST_FIELD (3 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **question** — Pregunta vacia: `""`
+
+                    - **question** — Pregunta menor a 3 caracteres: `ab`
+
+                    - **question** — Pregunta supera 500 caracteres: `AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: La pregunta debe tener entre 3 y 500 caracteres
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+                question_Pregunta_solo_espacios:
+                  summary: codigoRespuesta INVALID_REQUEST_FIELD (3 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **question** — Pregunta solo espacios: `   `
+
+                    - **question** — Pregunta nula
+
+                    - **body** — JSON vacio sin campo question: `{}`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: La pregunta del pasajero es obligatoria
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+                bookingId_bookingId_invalido_en_consulta:
+                  summary: bookingId invalido en consulta
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **bookingId** — bookingId invalido en consulta: `bad_id`'
+                  value:
+                    code: INVALID_PARAMETER_CONSTRAINT
+                    codigoRespuesta: INVALID_PARAMETER_CONSTRAINT
+                    message: Los parametros enviados incumplen el formato permitido
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/bad_id/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+                body_Propiedad_no_documentada_Mass_Assignment:
+                  summary: codigoRespuesta MALFORMED_OR_UNKNOWN_PAYLOAD (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **body** — Propiedad no documentada (Mass Assignment): `{"question":"Hola","role":"ADMIN"}`
+
+                    - **body** — JSON truncado malformado: `{"question":`'
+                  value:
+                    code: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    codigoRespuesta: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    message: El cuerpo JSON o las cabeceras de la solicitud son invalidos o contienen propiedades
+                      no permitidas
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+        '404':
+          description: Reserva no encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                get_trip_context_Reserva_inexistente_ZZZ999_en_consulta_404:
+                  summary: 'get_trip_context: Reserva inexistente ZZZ999 en consulta (404)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_trip_context** — Reserva inexistente ZZZ999 en consulta (404): `ZZZ999`'
+                  value:
+                    code: BOOKING_NOT_FOUND
+                    codigoRespuesta: BOOKING_NOT_FOUND
+                    message: No se encontro contexto de viaje para la reserva solicitada
+                    status: 404
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ZZZ999/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+        '405':
+          description: Metodo HTTP no permitido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                HTTP_Method_Verbo_GET_no_permitido_en_consultas_405:
+                  summary: 'HTTP Method: Verbo GET no permitido en consultas (405)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **HTTP Method** — Verbo GET no permitido en consultas (405): `GET`'
+                  value:
+                    code: METHOD_NOT_ALLOWED
+                    codigoRespuesta: METHOD_NOT_ALLOWED
+                    message: El verbo HTTP utilizado no esta soportado en este recurso
+                    status: 405
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+        '415':
+          description: Content-Type no soportado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                Content_Type_Content_Type_text_plain_no_soportado_415:
+                  summary: Content-Type text/plain no soportado (415)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **Content-Type** — Content-Type text/plain no soportado (415): `text/plain`'
+                  value:
+                    code: UNSUPPORTED_MEDIA_TYPE
+                    codigoRespuesta: UNSUPPORTED_MEDIA_TYPE
+                    message: El Content-Type enviado no es soportado; utilice application/json
+                    status: 415
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/consultas
+                    timestamp: '2026-09-15T11:03:00Z'
+  /operaciones/vuelos/v1/disrupciones/reservas/{bookingId}/reubicaciones:
+    post:
+      tags:
+      - Reubicaciones
+      operationId: createRebooking
+      summary: Ejecuta una solicitud idempotente de reacomodacion de vuelo
+      description: 'Valida elegibilidad determinista de la opcion solicitada (cupo familiar, vigencia TTL y tarifa
+        sin costo por R3), garantiza idempotencia en PostgreSQL mediante restriccion unica `(booking_id, idempotency_key)`
+        y protege la reserva ante timeouts upstream (`503`) persistiendo el estado `INDETERMINATE_PENDING_RECONCILIATION`.
+
+
+        <!-- matriz:inicio -->
+
+
+        #### Resultado real por valor enviado
+
+        Cada fila es una ejecución real contra el servicio. Los demás campos llevan el valor del ejemplo.
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | optionId | Creacion exitosa con opcion elegible O1 (201) | `O1` | 201 | respuesta exitosa |
+
+        | Idempotency-Key | Sin cabecera Idempotency-Key (400) | — | 400 | codigoRespuesta INVALID_IDEMPOTENCY_KEY
+        |
+
+        | Idempotency-Key | Idempotency-Key demasiado corta (<8 chars) | `short` | 400 | codigoRespuesta INVALID_IDEMPOTENCY_KEY
+        |
+
+        | Idempotency-Key | Idempotency-Key demasiado larga (>64 chars) | `kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk`
+        | 400 | codigoRespuesta INVALID_IDEMPOTENCY_KEY |
+
+        | Idempotency-Key | Idempotency-Key con espacios o inyeccion | `bad key <script>` | 400 | codigoRespuesta
+        INVALID_IDEMPOTENCY_KEY |
+
+        | optionId | optionId vacio | `""` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | optionId | optionId formato invalido (FLIGHT-1) | `FLIGHT-1` | 400 | codigoRespuesta INVALID_REQUEST_FIELD
+        |
+
+        | optionId | optionId con SQL Injection | `O1'' OR ''1''=''1` | 400 | codigoRespuesta INVALID_REQUEST_FIELD
+        |
+
+        | body | Propiedad extra forceFreeRebook (Mass Assignment) | `{"optionId":"O1","forceFreeRebook":true}`
+        | 400 | codigoRespuesta MALFORMED_OR_UNKNOWN_PAYLOAD |
+
+
+        #### Requests HTTP inusuales (método, ruta, cabeceras, codificación, tamaño)
+
+        Algunos los rechaza el servidor web antes de llegar a la aplicación: responden con su propia página (no
+        JSON).
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | Content-Type | Content-Type application/xml no soportado (415) | `application/xml` | 415 | codigoRespuesta
+        UNSUPPORTED_MEDIA_TYPE |
+
+        | HTTP Method | Verbo PUT no permitido en reubicaciones (405) | `PUT` | 405 | codigoRespuesta METHOD_NOT_ALLOWED
+        |
+
+
+        #### Respuesta ante cada situación de los sistemas de destino
+
+
+        | Sistema | Situación | HTTP | Respuesta |
+
+        |---|---|---|---|
+
+        | idempotency_store | Reintento idempotente con misma llave y opcion O1 (replayedIdempotent=true) | 201
+        | respuesta exitosa |
+
+        | idempotency_store | Conflicto 409 al reutilizar llave con distinta opcion O2 | 409 | codigoRespuesta IDEMPOTENCY_PAYLOAD_MISMATCH
+        |
+
+        | idempotency_store | Conflicto 409 al intentar segunda reubicacion activa en misma reserva | 409 | codigoRespuesta
+        BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE |
+
+        | eligibility_guard | Rechazo 422 por opcion O2 sin asientos suficientes en CONFL1 | 422 | codigoRespuesta
+        OPTION_NOT_ELIGIBLE |
+
+        | eligibility_guard | Rechazo 422 por opcion O3 de tipo REFUND no elegible en CONFL1 | 422 | codigoRespuesta
+        OPTION_NOT_ELIGIBLE |
+
+        | eligibility_guard | Rechazo 422 por opcion inexistente O99 en CONFL1 | 422 | codigoRespuesta OPTION_NOT_FOUND_OR_INELIGIBLE
+        |
+
+        | eligibility_guard | Rechazo 422 por catalogo vencido (TTL expirado) en EXP123 | 422 | codigoRespuesta
+        OPTION_NOT_ELIGIBLE |
+
+        | create_rebooking_request | Timeout 503 UPSTREAM_TIMEOUT registra estado indeterminado en TIM503 | 503
+        | codigoRespuesta UPSTREAM_TIMEOUT |
+
+        | create_rebooking_request | Reintento con misma llave tras timeout retorna 503 pendiente de reconciliacion
+        | 503 | codigoRespuesta UPSTREAM_TIMEOUT_PENDING_RECONCILIATION |
+
+        | create_rebooking_request | Bloqueo 409 ante intento con nueva llave mientras TIM503 esta indeterminado
+        | 409 | codigoRespuesta BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE |
+
+
+        <!-- matriz:fin -->'
+      parameters:
+      - $ref: '#/components/parameters/BookingIdParam'
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RebookingRequestDto'
+      responses:
+        '201':
+          description: Solicitud de reubicacion registrada o reproducida idempotentemente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RebookingResponseDto'
+              examples:
+                optionId_Creacion_exitosa_con_opcion_elegible_O1_201:
+                  summary: 'optionId: Creacion exitosa con opcion elegible O1 (201)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **optionId** — Creacion exitosa con opcion elegible O1 (201): `O1`'
+                  value:
+                    requestId: RBK-88231
+                    bookingId: ABC123
+                    optionId: O1
+                    flightNumber: LA2412
+                    status: PENDING_CONFIRMATION
+                    policyRef: POL-DELAY-2026-03
+                    notificationId: NT-9912
+                    expiresAt: '2026-09-15T11:12:00Z'
+                    replayedIdempotent: false
+                idempotency_store_Reintento_idempotente_con_misma_llave_y_op:
+                  summary: 'idempotency_store: Reintento idempotente con misma llave y opcion O1 (replayedIdempotent=true)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **idempotency_store** — Reintento idempotente con misma llave y opcion O1 (replayedIdempotent=true):
+                    `idem-oas-rebook-0001`'
+                  value:
+                    requestId: RBK-88231
+                    bookingId: ABC123
+                    optionId: O1
+                    flightNumber: LA2412
+                    status: PENDING_CONFIRMATION
+                    policyRef: POL-DELAY-2026-03
+                    notificationId: NT-9912
+                    expiresAt: '2026-09-15T11:12:00Z'
+                    replayedIdempotent: true
+        '400':
+          description: Cabecera Idempotency-Key u optionId invalido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                Idempotency_Key_Sin_cabecera_Idempotency_Key_400:
+                  summary: codigoRespuesta INVALID_IDEMPOTENCY_KEY (4 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **Idempotency-Key** — Sin cabecera Idempotency-Key (400)
+
+                    - **Idempotency-Key** — Idempotency-Key demasiado corta (<8 chars): `short`
+
+                    - **Idempotency-Key** — Idempotency-Key demasiado larga (>64 chars): `kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk`
+
+                    - **Idempotency-Key** — Idempotency-Key con espacios o inyeccion: `bad key <script>`'
+                  value:
+                    code: INVALID_IDEMPOTENCY_KEY
+                    codigoRespuesta: INVALID_IDEMPOTENCY_KEY
+                    message: La cabecera Idempotency-Key es obligatoria y debe tener entre 8 y 64 caracteres seguros
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                optionId_optionId_vacio:
+                  summary: optionId vacio
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **optionId** — optionId vacio: `""`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: El identificador de opcion (optionId) es obligatorio
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                optionId_optionId_formato_invalido_FLIGHT_1:
+                  summary: codigoRespuesta INVALID_REQUEST_FIELD (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **optionId** — optionId formato invalido (FLIGHT-1): `FLIGHT-1`
+
+                    - **optionId** — optionId con SQL Injection: `O1'' OR ''1''=''1`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: El optionId debe cumplir el formato O1..O999
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                body_Propiedad_extra_forceFreeRebook_Mass_Assignment:
+                  summary: 'body: Propiedad extra forceFreeRebook (Mass Assignment)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **body** — Propiedad extra forceFreeRebook (Mass Assignment): `{"optionId":"O1","forceFreeRebook":true}`'
+                  value:
+                    code: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    codigoRespuesta: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    message: El cuerpo JSON o las cabeceras de la solicitud son invalidos o contienen propiedades
+                      no permitidas
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '404':
+          description: Reserva no encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+        '405':
+          description: Metodo HTTP no permitido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                HTTP_Method_Verbo_PUT_no_permitido_en_reubicaciones_405:
+                  summary: 'HTTP Method: Verbo PUT no permitido en reubicaciones (405)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **HTTP Method** — Verbo PUT no permitido en reubicaciones (405): `PUT`'
+                  value:
+                    code: METHOD_NOT_ALLOWED
+                    codigoRespuesta: METHOD_NOT_ALLOWED
+                    message: El verbo HTTP utilizado no esta soportado en este recurso
+                    status: 405
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '409':
+          description: Conflicto de idempotencia o reubicacion previa activa/indeterminada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                idempotency_store_Conflicto_409_al_reutilizar_llave_con_dist:
+                  summary: 'idempotency_store: Conflicto 409 al reutilizar llave con distinta opcion O2'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **idempotency_store** — Conflicto 409 al reutilizar llave con distinta opcion O2: `idem-oas-rebook-0001
+                    + O2`'
+                  value:
+                    code: IDEMPOTENCY_PAYLOAD_MISMATCH
+                    codigoRespuesta: IDEMPOTENCY_PAYLOAD_MISMATCH
+                    message: La llave de idempotencia ya fue utilizada con una opcion distinta
+                    status: 409
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                idempotency_store_Conflicto_409_al_intentar_segunda_reubicac:
+                  summary: 'idempotency_store: Conflicto 409 al intentar segunda reubicacion activa en misma reserva'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **idempotency_store** — Conflicto 409 al intentar segunda reubicacion activa en misma reserva:
+                    `idem-oas-rebook-0002`'
+                  value:
+                    code: BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE
+                    codigoRespuesta: BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE
+                    message: Ya existe una reacomodacion en curso o pendiente de reconciliacion para la reserva
+                    status: 409
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                create_rebooking_request_Bloqueo_409_ante_intento_con_nueva_:
+                  summary: 'create_rebooking_request: Bloqueo 409 ante intento con nueva llave mientras TIM503 esta
+                    indeterminado'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **create_rebooking_request** — Bloqueo 409 ante intento con nueva llave mientras TIM503 esta
+                    indeterminado: `TIM503 + idem-oas-tim-0002`'
+                  value:
+                    code: BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE
+                    codigoRespuesta: BOOKING_REBOOKING_ALREADY_ACTIVE_OR_INDETERMINATE
+                    message: Ya existe una reacomodacion en curso o pendiente de reconciliacion para la reserva
+                    status: 409
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/TIM503/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '415':
+          description: Content-Type no soportado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                Content_Type_Content_Type_application_xml_no_soportado_415:
+                  summary: Content-Type application/xml no soportado (415)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **Content-Type** — Content-Type application/xml no soportado (415): `application/xml`'
+                  value:
+                    code: UNSUPPORTED_MEDIA_TYPE
+                    codigoRespuesta: UNSUPPORTED_MEDIA_TYPE
+                    message: El Content-Type enviado no es soportado; utilice application/json
+                    status: 415
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '422':
+          description: La opcion solicitada incumple reglas de elegibilidad, cupo o vigencia TTL.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                eligibility_guard_Rechazo_422_por_opcion_O2_sin_asientos_suf:
+                  summary: 'eligibility_guard: Rechazo 422 por opcion O2 sin asientos suficientes en CONFL1'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **eligibility_guard** — Rechazo 422 por opcion O2 sin asientos suficientes en CONFL1: `O2`'
+                  value:
+                    code: OPTION_NOT_ELIGIBLE
+                    codigoRespuesta: OPTION_NOT_ELIGIBLE
+                    message: 'La opcion solicitada incumple reglas de elegibilidad: INSUFFICIENT_SEATS_FOR_GROUP,
+                      NON_ZERO_FARE_WHEN_NO_FEE_ENTITLED'
+                    status: 422
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/CONFL1/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                eligibility_guard_Rechazo_422_por_opcion_O3_de_tipo_REFUND_n:
+                  summary: 'eligibility_guard: Rechazo 422 por opcion O3 de tipo REFUND no elegible en CONFL1'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **eligibility_guard** — Rechazo 422 por opcion O3 de tipo REFUND no elegible en CONFL1: `O3`'
+                  value:
+                    code: OPTION_NOT_ELIGIBLE
+                    codigoRespuesta: OPTION_NOT_ELIGIBLE
+                    message: 'La opcion solicitada incumple reglas de elegibilidad: NON_REFUNDABLE_FARE_AND_LOW_CONFIDENCE'
+                    status: 422
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/CONFL1/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                eligibility_guard_Rechazo_422_por_opcion_inexistente_O99_en_:
+                  summary: 'eligibility_guard: Rechazo 422 por opcion inexistente O99 en CONFL1'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **eligibility_guard** — Rechazo 422 por opcion inexistente O99 en CONFL1: `O99`'
+                  value:
+                    code: OPTION_NOT_FOUND_OR_INELIGIBLE
+                    codigoRespuesta: OPTION_NOT_FOUND_OR_INELIGIBLE
+                    message: La opcion solicitada no existe dentro del catalogo elegible de la reserva
+                    status: 422
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/CONFL1/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                eligibility_guard_Rechazo_422_por_catalogo_vencido_TTL_expir:
+                  summary: 'eligibility_guard: Rechazo 422 por catalogo vencido (TTL expirado) en EXP123'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **eligibility_guard** — Rechazo 422 por catalogo vencido (TTL expirado) en EXP123: `EXP123
+                    + O1`'
+                  value:
+                    code: OPTION_NOT_ELIGIBLE
+                    codigoRespuesta: OPTION_NOT_ELIGIBLE
+                    message: 'La opcion solicitada incumple reglas de elegibilidad: OPTION_TTL_EXPIRED'
+                    status: 422
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/EXP123/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+        '503':
+          description: Timeout indeterminado en el sistema upstream de reacomodacion.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                create_rebooking_request_Timeout_503_UPSTREAM_TIMEOUT_regist:
+                  summary: 'create_rebooking_request: Timeout 503 UPSTREAM_TIMEOUT registra estado indeterminado
+                    en TIM503'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **create_rebooking_request** — Timeout 503 UPSTREAM_TIMEOUT registra estado indeterminado
+                    en TIM503: `TIM503 + idem-oas-tim-0001`'
+                  value:
+                    code: UPSTREAM_TIMEOUT
+                    codigoRespuesta: UPSTREAM_TIMEOUT
+                    message: Timeout al invocar create_rebooking_request; el resultado real es indeterminado
+                    status: 503
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/TIM503/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+                create_rebooking_request_Reintento_con_misma_llave_tras_time:
+                  summary: 'create_rebooking_request: Reintento con misma llave tras timeout retorna 503 pendiente
+                    de reconciliacion'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **create_rebooking_request** — Reintento con misma llave tras timeout retorna 503 pendiente
+                    de reconciliacion: `TIM503 + idem-oas-tim-0001 (replay)`'
+                  value:
+                    code: UPSTREAM_TIMEOUT_PENDING_RECONCILIATION
+                    codigoRespuesta: UPSTREAM_TIMEOUT_PENDING_RECONCILIATION
+                    message: La solicitud previa se encuentra en estado indeterminado pendiente de reconciliacion
+                    status: 503
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/TIM503/reubicaciones
+                    timestamp: '2026-09-15T11:03:00Z'
+  /operaciones/vuelos/v1/disrupciones/reservas/{bookingId}/escalamientos:
+    post:
+      tags:
+      - Escalamientos
+      operationId: createHumanEscalation
+      summary: Crea un caso idempotente de asistencia prioritaria humana sin exponer PII
+      description: 'Escala el caso a la cola especializada (`DISRUPTION_L2`) adjuntando evidencia tecnica verificada
+        y sanitizada (cero PII crudo), garantizando idempotencia transaccional por `(booking_id, idempotency_key)`.
+
+
+        <!-- matriz:inicio -->
+
+
+        #### Resultado real por valor enviado
+
+        Cada fila es una ejecución real contra el servicio. Los demás campos llevan el valor del ejemplo.
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | reason | Creacion exitosa de caso humano (201) | `Grupo familiar con menor de edad requiere asistencia
+        prioritaria y pernocta en Lima` | 201 | respuesta exitosa |
+
+        | Idempotency-Key | Sin cabecera Idempotency-Key en escalamiento (400) | — | 400 | codigoRespuesta INVALID_IDEMPOTENCY_KEY
+        |
+
+        | reason | Motivo vacio (400) | `""` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | reason | Motivo demasiado corto (<5 chars) | `abc` | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | reason | Motivo supera 300 caracteres | `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`
+        | 400 | codigoRespuesta INVALID_REQUEST_FIELD |
+
+        | body | Propiedad desconocida queueOverride en escalamiento (400) | `{"reason":"Asistencia prioritaria","queueOverride":"VIP"}`
+        | 400 | codigoRespuesta MALFORMED_OR_UNKNOWN_PAYLOAD |
+
+
+        #### Requests HTTP inusuales (método, ruta, cabeceras, codificación, tamaño)
+
+        Algunos los rechaza el servidor web antes de llegar a la aplicación: responden con su propia página (no
+        JSON).
+
+
+        | Campo | Caso | Valor enviado | HTTP | Respuesta |
+
+        |---|---|---|---|---|
+
+        | HTTP Method | Verbo DELETE no permitido en escalamientos (405) | `DELETE` | 405 | codigoRespuesta METHOD_NOT_ALLOWED
+        |
+
+
+        #### Respuesta ante cada situación de los sistemas de destino
+
+
+        | Sistema | Situación | HTTP | Respuesta |
+
+        |---|---|---|---|
+
+        | idempotency_store | Reintento idempotente de caso humano (replayedIdempotent=true) | 201 | respuesta exitosa
+        |
+
+        | idempotency_store | Conflicto 409 al cambiar motivo con la misma Idempotency-Key | 409 | codigoRespuesta
+        IDEMPOTENCY_PAYLOAD_MISMATCH |
+
+        | get_trip_context | Reserva inexistente ZZZ999 en escalamiento (404) | 404 | codigoRespuesta BOOKING_NOT_FOUND
+        |
+
+
+        <!-- matriz:fin -->'
+      parameters:
+      - $ref: '#/components/parameters/BookingIdParam'
+      - $ref: '#/components/parameters/IdempotencyKeyHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EscalationRequestDto'
+      responses:
+        '201':
+          description: Caso humano creado o reproducido idempotentemente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EscalationResponseDto'
+              examples:
+                reason_Creacion_exitosa_de_caso_humano_201:
+                  summary: 'reason: Creacion exitosa de caso humano (201)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **reason** — Creacion exitosa de caso humano (201): `Grupo familiar con menor de edad requiere
+                    asistencia prioritaria y pernocta en Lima`'
+                  value:
+                    caseId: HC-4473
+                    bookingId: ABC123
+                    queue: DISRUPTION_L2
+                    slaMinutes: 45
+                    reason: Grupo familiar con menor de edad requiere asistencia prioritaria y pernocta en Lima
+                    replayedIdempotent: false
+                idempotency_store_Reintento_idempotente_de_caso_humano_repla:
+                  summary: 'idempotency_store: Reintento idempotente de caso humano (replayedIdempotent=true)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **idempotency_store** — Reintento idempotente de caso humano (replayedIdempotent=true): `idem-oas-esc-0001`'
+                  value:
+                    caseId: HC-4473
+                    bookingId: ABC123
+                    queue: DISRUPTION_L2
+                    slaMinutes: 45
+                    reason: Grupo familiar con menor de edad requiere asistencia prioritaria y pernocta en Lima
+                    replayedIdempotent: true
+        '400':
+          description: Cabecera Idempotency-Key o motivo invalido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                Idempotency_Key_Sin_cabecera_Idempotency_Key_en_escalamiento:
+                  summary: 'Idempotency-Key: Sin cabecera Idempotency-Key en escalamiento (400)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **Idempotency-Key** — Sin cabecera Idempotency-Key en escalamiento (400)'
+                  value:
+                    code: INVALID_IDEMPOTENCY_KEY
+                    codigoRespuesta: INVALID_IDEMPOTENCY_KEY
+                    message: La cabecera Idempotency-Key es obligatoria y debe tener entre 8 y 64 caracteres seguros
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+                reason_Motivo_vacio_400:
+                  summary: 'reason: Motivo vacio (400)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **reason** — Motivo vacio (400): `""`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: El motivo de escalamiento (reason) es obligatorio
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+                reason_Motivo_demasiado_corto_5_chars:
+                  summary: codigoRespuesta INVALID_REQUEST_FIELD (2 casos)
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **reason** — Motivo demasiado corto (<5 chars): `abc`
+
+                    - **reason** — Motivo supera 300 caracteres: `XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX`'
+                  value:
+                    code: INVALID_REQUEST_FIELD
+                    codigoRespuesta: INVALID_REQUEST_FIELD
+                    message: El motivo debe tener entre 5 y 300 caracteres
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+                body_Propiedad_desconocida_queueOverride_en_escalamiento_400:
+                  summary: 'body: Propiedad desconocida queueOverride en escalamiento (400)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **body** — Propiedad desconocida queueOverride en escalamiento (400): `{"reason":"Asistencia
+                    prioritaria","queueOverride":"VIP"}`'
+                  value:
+                    code: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    codigoRespuesta: MALFORMED_OR_UNKNOWN_PAYLOAD
+                    message: El cuerpo JSON o las cabeceras de la solicitud son invalidos o contienen propiedades
+                      no permitidas
+                    status: 400
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+        '404':
+          description: Reserva no encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                get_trip_context_Reserva_inexistente_ZZZ999_en_escalamiento_:
+                  summary: 'get_trip_context: Reserva inexistente ZZZ999 en escalamiento (404)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **get_trip_context** — Reserva inexistente ZZZ999 en escalamiento (404): `ZZZ999`'
+                  value:
+                    code: BOOKING_NOT_FOUND
+                    codigoRespuesta: BOOKING_NOT_FOUND
+                    message: No se encontro contexto de viaje para la reserva solicitada
+                    status: 404
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ZZZ999/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+        '405':
+          description: Metodo HTTP no permitido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                HTTP_Method_Verbo_DELETE_no_permitido_en_escalamientos_405:
+                  summary: 'HTTP Method: Verbo DELETE no permitido en escalamientos (405)'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **HTTP Method** — Verbo DELETE no permitido en escalamientos (405): `DELETE`'
+                  value:
+                    code: METHOD_NOT_ALLOWED
+                    codigoRespuesta: METHOD_NOT_ALLOWED
+                    message: El verbo HTTP utilizado no esta soportado en este recurso
+                    status: 405
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+        '409':
+          description: Conflicto de idempotencia por cambio de motivo con la misma llave.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+              examples:
+                idempotency_store_Conflicto_409_al_cambiar_motivo_con_la_mis:
+                  summary: 'idempotency_store: Conflicto 409 al cambiar motivo con la misma Idempotency-Key'
+                  description: 'Respuesta real. Se obtiene con:
+
+
+                    - **idempotency_store** — Conflicto 409 al cambiar motivo con la misma Idempotency-Key: `idem-oas-esc-0001
+                    + otro motivo`'
+                  value:
+                    code: IDEMPOTENCY_PAYLOAD_MISMATCH
+                    codigoRespuesta: IDEMPOTENCY_PAYLOAD_MISMATCH
+                    message: La llave de idempotencia ya fue utilizada con un motivo de escalamiento distinto
+                    status: 409
+                    path: /operaciones/vuelos/v1/disrupciones/reservas/ABC123/escalamientos
+                    timestamp: '2026-09-15T11:03:00Z'
+        '415':
+          description: Content-Type no soportado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorResponse'
+components:
+  parameters:
+    BookingIdParam:
+      name: bookingId
+      in: path
+      required: true
+      description: Identificador alfanumerico de la reserva (6 a 8 caracteres en mayusculas).
+      schema:
+        type: string
+        pattern: ^[A-Z0-9]{6,8}$
+        example: ABC123
+    IdempotencyKeyHeader:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Llave unica de idempotencia (8 a 64 caracteres seguros).
+      schema:
+        type: string
+        pattern: ^[A-Za-z0-9._-]{8,64}$
+        example: idem-rebook-2026-0001
+  schemas:
+    OptionEvaluationDto:
+      type: object
+      required:
+      - optionId
+      - type
+      - seatsAvailable
+      - policyRef
+      - confidence
+      - eligible
+      - rejectionReasons
+      properties:
+        optionId:
+          type: string
+          example: O1
+        type:
+          type: string
+          example: REBOOK
+        flightNumber:
+          type: string
+          nullable: true
+          example: LA2412
+        origin:
+          type: string
+          nullable: true
+          example: LIM
+        destination:
+          type: string
+          nullable: true
+          example: MEX
+        date:
+          type: string
+          nullable: true
+          example: '2026-09-16'
+        departure:
+          type: string
+          nullable: true
+          example: 08:15
+        fareDifference:
+          type: integer
+          format: int64
+          nullable: true
+          example: 0
+        currency:
+          type: string
+          nullable: true
+          example: CLP
+        seatsAvailable:
+          type: integer
+          example: 4
+        policyRef:
+          type: string
+          example: POL-DELAY-2026-03
+        confidence:
+          type: string
+          example: HIGH
+        eligible:
+          type: boolean
+          example: true
+        rejectionReasons:
+          type: array
+          items:
+            type: string
+    AssessmentResponseDto:
+      type: object
+      required:
+      - bookingId
+      - passengerCount
+      - includesMinor
+      - relevantModification
+      - missedConnection
+      - primaryDelayMinutes
+      - policyVersion
+      - appliedRuleIds
+      - entitlements
+      - requiresHumanApproval
+      - overnightRequired
+      - blockedByMissingPenaltyAmount
+      - optionsExpired
+      - evaluatedOptions
+      - passengerExplanation
+      properties:
+        bookingId:
+          type: string
+          example: ABC123
+        passengerCount:
+          type: integer
+          example: 2
+        includesMinor:
+          type: boolean
+          example: true
+        relevantModification:
+          type: boolean
+          example: true
+        missedConnection:
+          type: boolean
+          example: true
+        primaryDelayMinutes:
+          type: integer
+          example: 160
+        updatedDepartureTime:
+          type: string
+          nullable: true
+          example: '17:10'
+        updatedGate:
+          type: string
+          nullable: true
+          example: '24'
+        sourceConflictDetected:
+          type: boolean
+          example: false
+        discardedSources:
+          type: array
+          items:
+            type: string
+        policyVersion:
+          type: string
+          example: POL-DELAY-2026-03
+        appliedRuleIds:
+          type: array
+          items:
+            type: string
+        entitlements:
+          type: array
+          items:
+            type: string
+        requiresHumanApproval:
+          type: boolean
+          example: true
+        overnightRequired:
+          type: boolean
+          example: true
+        blockedByMissingPenaltyAmount:
+          type: boolean
+          example: false
+        optionsExpired:
+          type: boolean
+          example: false
+        recommendedOptionId:
+          type: string
+          nullable: true
+          example: O1
+        recommendedFlightNumber:
+          type: string
+          nullable: true
+          example: LA2412
+        evaluatedOptions:
+          type: array
+          items:
+            $ref: '#/components/schemas/OptionEvaluationDto'
+        passengerExplanation:
+          type: string
+    InquiryRequestDto:
+      type: object
+      additionalProperties: false
+      required:
+      - question
+      properties:
+        question:
+          type: string
+          minLength: 3
+          maxLength: 500
+          example: ¿Que opciones tengo para llegar a Mexico con mi hijo?
+    InquiryResponseDto:
+      type: object
+      required:
+      - bookingId
+      - resolutionMode
+      - validatedPolicyRef
+      - confidenceScore
+      - requiresHumanEscalation
+      - message
+      properties:
+        bookingId:
+          type: string
+          example: ABC123
+        resolutionMode:
+          type: string
+          example: AI_ASSISTED_VALIDATED
+        validatedPolicyRef:
+          type: string
+          example: POL-DELAY-2026-03
+        recommendedOptionId:
+          type: string
+          nullable: true
+          example: O1
+        confidenceScore:
+          type: number
+          format: double
+          example: 0.94
+        requiresHumanEscalation:
+          type: boolean
+          example: true
+        humanCaseId:
+          type: string
+          nullable: true
+          example: HC-4471
+        guardrailRejectionReason:
+          type: string
+          nullable: true
+        message:
+          type: string
+    RebookingRequestDto:
+      type: object
+      additionalProperties: false
+      required:
+      - optionId
+      properties:
+        optionId:
+          type: string
+          pattern: ^O[0-9]{1,3}$
+          example: O1
+    RebookingResponseDto:
+      type: object
+      required:
+      - requestId
+      - bookingId
+      - optionId
+      - flightNumber
+      - status
+      - policyRef
+      - expiresAt
+      - replayedIdempotent
+      properties:
+        requestId:
+          type: string
+          example: RBK-88231
+        bookingId:
+          type: string
+          example: ABC123
+        optionId:
+          type: string
+          example: O1
+        flightNumber:
+          type: string
+          example: LA2412
+        status:
+          type: string
+          example: PENDING_CONFIRMATION
+        policyRef:
+          type: string
+          example: POL-DELAY-2026-03
+        notificationId:
+          type: string
+          nullable: true
+          example: NT-9912
+        expiresAt:
+          type: string
+          format: date-time
+        replayedIdempotent:
+          type: boolean
+          example: false
+    EscalationRequestDto:
+      type: object
+      additionalProperties: false
+      required:
+      - reason
+      properties:
+        reason:
+          type: string
+          minLength: 5
+          maxLength: 300
+          example: Grupo familiar con menor de edad requiere asistencia de pernocta en Lima
+    EscalationResponseDto:
+      type: object
+      required:
+      - caseId
+      - bookingId
+      - queue
+      - slaMinutes
+      - reason
+      - replayedIdempotent
+      properties:
+        caseId:
+          type: string
+          example: HC-4471
+        bookingId:
+          type: string
+          example: ABC123
+        queue:
+          type: string
+          example: DISRUPTION_L2
+        slaMinutes:
+          type: integer
+          example: 45
+        reason:
+          type: string
+        replayedIdempotent:
+          type: boolean
+          example: false
+    ApiErrorResponse:
+      type: object
+      required:
+      - code
+      - codigoRespuesta
+      - message
+      - status
+      - path
+      - timestamp
+      properties:
+        code:
+          type: string
+          example: INVALID_REQUEST_FIELD
+        codigoRespuesta:
+          type: string
+          example: INVALID_REQUEST_FIELD
+        message:
+          type: string
+        status:
+          type: integer
+          example: 400
+        path:
+          type: string
+        timestamp:
+          type: string
+          format: date-time

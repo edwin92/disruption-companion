@@ -1,0 +1,36 @@
+services:
+  postgres-disruption:
+    image: postgres:17-alpine
+    container_name: latam-disruption-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-disruption_db}
+      POSTGRES_USER: ${POSTGRES_USER:-disruption_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-disruption_local_pwd}
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-disruption_user} -d $${POSTGRES_DB:-disruption_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  disruption-companion-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: latam-disruption-api
+    depends_on:
+      postgres-disruption:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres-disruption:5432/${POSTGRES_DB:-disruption_db}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-disruption_user}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-disruption_local_pwd}
+      SERVER_PORT: 8080
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10

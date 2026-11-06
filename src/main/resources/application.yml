@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: latam-disruption-companion
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5433/disruption_db}
+    username: ${SPRING_DATASOURCE_USERNAME:disruption_user}
+    password: ${SPRING_DATASOURCE_PASSWORD:disruption_local_pwd}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  sql:
+    init:
+      mode: always
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+      fail-on-reading-dup-tree-key: true
+
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    include-message: never
+    include-binding-errors: never
+    include-stacktrace: never
+    include-exception: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true
+
+disruption:
+  clock:
+    fixed-instant: ${DISRUPTION_CLOCK_FIXED_INSTANT:2026-09-15T11:03:00Z}
+  ai:
+    simulation-triggers-enabled: ${DISRUPTION_AI_SIMULATION_TRIGGERS_ENABLED:true}
